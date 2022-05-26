@@ -9,9 +9,13 @@ Logs uptime, battery voltage, device wattage and battery %remaining from the
 GeeekPi UPSv5 (EP-0136) board, connected to a Raspberry Pi,and writes to a
 timestamped CSV file for optional graphing via Pandas (if installed).
 
-Usage:
+Usage original:
 'python3 upspv5-batt-logger.py' - logs to local [timestamp].csv file
 'python3 upspv5-batt-logger.py file.csv "[label for graph title]"' - graph results as local png images
+
+Usage now:
+'python3 upspv5-batt-logger.py --csvfile="[path to file.csv]" --runonce #both arguments are optional
+
 
 Use to capture battery discharge profile. Run immediately after booting the device
 following a full charge for best results. Recommend enabling 'Overlay FS' if using
@@ -22,12 +26,13 @@ Note: "% remaining" is not accurate during charging.
 """
 
 import sys
+import os
 import time
-import io
 import csv
+import argparse
 from datetime import datetime
 
-import smbus
+import smbus2
 from ina219 import INA219, DeviceRangeError
 
 I2C_DEVICE_BUS = 1
@@ -39,92 +44,47 @@ STOP_ON_ERR = 0  # stop logging on bus read error
 
 now = datetime.now()
 T = now.strftime("%Y-%m-%d_%H%M%S")
-CSV_FILE = "batt_log_" + T + ".csv"
 
-bus = smbus.SMBus(I2C_DEVICE_BUS)
+bus = smbus2.SMBus(I2C_DEVICE_BUS)
 ina = INA219(0.00725, busnum=I2C_DEVICE_BUS, address=INA_DEVICE_ADDR)
 ina.configure()
 ina_batteries = INA219(0.005, busnum=I2C_DEVICE_BUS, address=INA_BATT_ADDR)
 ina_batteries.configure()
+runonce = False
+csv_file = "batt_log_" + T + ".csv"
 
 
-def make_graph():
-    # test for pandas, then graph file referenced as argument if available
-    try:
-        # check dependencies
-        print("Checking: Pandas library installed.")
-        import pandas as pd
-        print("Checking: MatplotLib library installed.")
-        import matplotlib.pyplot as plt
-        from matplotlib.dates import DateFormatter
+def parse_args():
+    parser = argparse.ArgumentParser(description='gets data from a upsplus board attachted to a raspi via i2c')
+    parser.add_argument("--runonce", help="signals whether or not the scripts runs one time or forever (till ctrl-c)", action="store_true")
+    parser.add_argument("--csvfile", help="writes the data to a csvfile with this filename. will be created when it doesn't exist. will be appended when it exists (assuming it is in the correct format)", required=False, type=str)
+    args = parser.parse_args()
+    
+    global runonce
+    runonce = args.runonce
+    print(f"runonce? {runonce}")
+    
+    if args.csvfile:
+        #check the extension. the file is created later on, so no check needed if it exists
+        if os.path.splitext(args.csvfile)[-1].lower() == ".csv":
+            print(f"this seems to be a valid args.csvfile! {args.csvfile}")
+            global csv_file
+            csv_file = args.csvfile
+            
 
-        # build and save voltage graph
-        df = pd.read_csv(sys.argv[1])
-        df['Time (H:M)'] = pd.to_datetime(df['Time (s)'], unit='s')
+def create_file(csv_file_name):
+    #if the file already exist, and its extension is .csv, return
+    if os.path.isfile(csv_file_name) and os.path.splitext(csv_file_name)[-1].lower() == ".csv":
+        print(f"csv file already exist: {csv_file_name}")
+        return
 
-        df.plot(x="Time (H:M)", y=["Volts (mV)"], grid=True, color='Red')  # items to plot
-        plt.gca().xaxis.set_major_formatter(DateFormatter('%H:%M'))
-        plt.title("Time/voltage plot of " + str(sys.argv[2]))
-        plt.savefig("Graph_voltage_" + sys.argv[1] + ".png")  # save as png
-
-        # build and save voltage, Pi wattage, batt%, batt current and batt temp graphs
-        fig, (ax1, ax2, ax3, ax4, ax5) = plt.subplots(nrows=5, ncols=1)
-        df.plot(x="Time (H:M)", y=["Volts (mV)"], legend=True, ax=ax1, figsize=(10, 10), grid=True,
-                color='Red')  # items to plot
-        ax1.xaxis.set_major_formatter(DateFormatter('%H:%M'))
-        ax1.set_title("Time/Voltage plot of " + str(sys.argv[2]))
-
-        df.plot(x="Time (H:M)", y=["Power (mW)"], legend=True, ax=ax2, figsize=(10, 10), grid=True,
-                color='Green')  # items to plot
-        ax2.xaxis.set_major_formatter(DateFormatter('%H:%M'))
-        ax2.set_title("Time/Power plot of " + str(sys.argv[2]))
-
-        df.plot(x="Time (H:M)", y=["Remaining %"], legend=True, ax=ax3, figsize=(10, 10), grid=True,
-                color='Blue')  # items to plot
-        ax3.xaxis.set_major_formatter(DateFormatter('%H:%M'))
-        ax3.set_title("Time/Remaining% plot of " + str(sys.argv[2]))
-
-        df.plot(x="Time (H:M)", y=["Battery Current (mA)"], legend=True, ax=ax4, figsize=(10, 10), grid=True,
-                color='Blue')  # items to plot
-        ax4.xaxis.set_major_formatter(DateFormatter('%H:%M'))
-        ax4.set_title("Time/BattCurrent mA plot of " + str(sys.argv[2]))
-
-        df.plot(x="Time (H:M)", y=["Batt. Temp (ºC)"], legend=True, ax=ax5, figsize=(10, 10), grid=True,
-                color='Blue')  # items to plot
-        ax5.xaxis.set_major_formatter(DateFormatter('%H:%M'))
-        ax5.set_title("Time/BattTempºC plot of " + str(sys.argv[2]))
-
-        plt.tight_layout()
-        plt.savefig("Graphs_full_" + sys.argv[1] + ".png")  # save as png
-
-        print("Graphs saved sucessfully")
-
-    except ImportError:
-        print("Error: Cannot build graph - Pandas and/or matplotlib library not installed.")
-        print("")
-        print(
-            "To install dependancies, use 'pip3 install pandas matplotlib'. If you encounter errors over the Pandas "
-            "dependancy 'numpy', you are probably running Debian Buster on a Pi, and so also need to install OpenBLAS "
-            "('apt-get install libatlas-base-dev")
-
-
-def check_args():
-    # test for graph argument, build graph, then exit
-    if len(sys.argv) == 2:
-        print("Error: Please enter a graph title in double-quotes after file name")
-        sys.exit()
-
-    if len(sys.argv) > 2:
-        make_graph()
-        sys.exit()
-
-
-def create_file():
+    print(f"creating file: {csv_file_name}")
     # create csv file and write headers 
-    with open(CSV_FILE, 'x', newline='') as file:
+    with open(csv_file_name, 'x', newline='') as file:
         writer = csv.writer(file, quoting=csv.QUOTE_NONNUMERIC)
         csvtitles = [
-            "Time (s)",
+            "RegisterTimestamp",
+            "Uptime (s)",
             "Volts (mV)",
             "Power (mW)",
             "Remaining %",
@@ -135,15 +95,16 @@ def create_file():
 
 
 def main():
-    check_args()
-    create_file()
+    parse_args()
+    create_file(csv_file)
     while True:
-        # Loop indefinately whilst reading and writing data, until user hits Ctrl-C 
+        # Loop indefinately whilst reading and writing data, until user hits Ctrl-C, or break when run once flag is set
         try:
             a_receive_buf = [0x00]
             for i in range(1, 255):
                 a_receive_buf.append(bus.read_byte_data(SMB_DEVICE_ADDR, i))
             csvdata = [
+                T,
                 "%d" % (a_receive_buf[39] << 24 | a_receive_buf[38] << 16 | a_receive_buf[37] << 8 | a_receive_buf[36]),
                 "%d" % (a_receive_buf[6] << 8 | a_receive_buf[5]),
                 "%.0f" % ina.power(),
@@ -151,9 +112,13 @@ def main():
                 "%.0f" % ina_batteries.current(),
                 "%d" % (a_receive_buf[12] << 8 | a_receive_buf[11])]
             print(csvdata)
-            with open(CSV_FILE, 'a', newline='') as file:
+            with open(csv_file, 'a', newline='') as file:
                 writer = csv.writer(file, quoting=csv.QUOTE_NONNUMERIC)
                 writer.writerow(csvdata)
+            #break when we only want to run this once
+            if runonce:
+                break
+            #otherwise, sleep and continue
             time.sleep(DELAY)
         except KeyboardInterrupt:
             sys.exit()
