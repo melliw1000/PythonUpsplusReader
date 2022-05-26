@@ -1,3 +1,5 @@
+Fork from 'Nordln/upsplusv5-battery-logger', created a visual studio .sln and .pyproj and added requirements.txt. Furthermore, only code remains to read the data from the upsplus device
+
 # UPSplus v5 Battery Logger V1.1
 Original author: Ed Watson (mail@edwilldesign.com)
 Contributors: leandroalbero
